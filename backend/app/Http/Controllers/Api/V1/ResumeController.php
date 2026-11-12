@@ -3,35 +3,40 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\StoreResumeRequest;
+use App\Http\Requests\UpdateResumeRequest;
 use App\Http\Resources\ResumeResource;
+use App\Http\Resources\ResumeSummaryResource;
 use App\Models\Resume;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
-use Illuminate\Validation\Rule;
 
 class ResumeController extends Controller
 {
+    /**
+     * @var array<int, string>
+     */
+    private const SUMMARY_COLUMNS = ['id', 'name', 'role', 'style', 'updated_at'];
+
     public function index(Request $request): AnonymousResourceCollection
     {
+        $perPage = min(100, max(1, $request->integer('per_page', 20)));
+
         $resumes = $request->user()
             ->resumes()
+            ->select(self::SUMMARY_COLUMNS)
             ->latest('updated_at')
-            ->get();
+            ->latest('id')
+            ->paginate($perPage);
 
-        return ResumeResource::collection($resumes);
+        return ResumeSummaryResource::collection($resumes);
     }
 
-    public function store(Request $request): JsonResponse
+    public function store(StoreResumeRequest $request): JsonResponse
     {
-        $validated = $request->validate([
-            'name' => ['required', 'string', 'max:120'],
-            'role' => ['required', 'string', 'max:120'],
-            'style' => ['required', 'string', Rule::in(['editorial', 'classic', 'modern', 'minimal'])],
-        ]);
-
-        $resume = $request->user()->resumes()->create($validated);
+        $resume = $request->user()->resumes()->create($request->validated());
 
         return (new ResumeResource($resume))
             ->response()
@@ -45,15 +50,26 @@ class ResumeController extends Controller
         return new ResumeResource($resume);
     }
 
-    public function update(Request $request, Resume $resume): ResumeResource
+    /**
+     * PUT requires the complete set of core fields. PATCH requires only the
+     * fields being changed. The `document` is replaced as a whole whenever it
+     * is present in the payload; when it is omitted, only `style` is kept in
+     * sync with its redundant `document.template` copy.
+     */
+    public function update(UpdateResumeRequest $request, Resume $resume): ResumeResource
     {
         abort_unless($resume->user_id === $request->user()->id, 404);
 
-        $validated = $request->validate([
-            'name' => ['required', 'string', 'max:120'],
-            'role' => ['required', 'string', 'max:120'],
-            'style' => ['required', 'string', Rule::in(['editorial', 'classic', 'modern', 'minimal'])],
-        ]);
+        $validated = $request->validated();
+
+        if (! array_key_exists('document', $validated) && array_key_exists('style', $validated)) {
+            $document = $resume->document;
+
+            if (is_array($document) && isset($document['template']) && $document['template'] !== $validated['style']) {
+                $document['template'] = $validated['style'];
+                $validated['document'] = $document;
+            }
+        }
 
         $resume->update($validated);
 

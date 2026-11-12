@@ -17,6 +17,7 @@ class ResumeResource extends JsonResource
             'name' => $this->name,
             'role' => $this->role,
             'style' => $this->style,
+            'document' => $this->document,
             'updated_at' => $this->updated_at,
         ];
     }

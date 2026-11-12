@@ -119,4 +119,92 @@ class ResumeApiTest extends TestCase
             ->assertUnprocessable()
             ->assertJsonValidationErrors(['name', 'style']);
     }
+
+    public function test_put_requires_all_core_fields_while_patch_accepts_a_subset(): void
+    {
+        $user = User::factory()->create();
+        $resume = $user->resumes()->create([
+            'name' => 'Grace Hopper',
+            'role' => 'Compiladora',
+            'style' => 'modern',
+        ]);
+
+        $this->actingAs($user);
+
+        $this->putJson("/api/v1/resumes/{$resume->id}", [
+            'name' => 'Grace Murray Hopper',
+        ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['role', 'style']);
+
+        $this->patchJson("/api/v1/resumes/{$resume->id}", [
+            'name' => 'Grace Murray Hopper',
+        ])
+            ->assertOk()
+            ->assertJsonPath('data.name', 'Grace Murray Hopper')
+            ->assertJsonPath('data.role', 'Compiladora')
+            ->assertJsonPath('data.style', 'modern');
+
+        $this->patchJson("/api/v1/resumes/{$resume->id}", ['style' => 'not-a-template'])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['style']);
+
+        $this->assertDatabaseHas('resumes', [
+            'id' => $resume->id,
+            'name' => 'Grace Murray Hopper',
+            'role' => 'Compiladora',
+            'style' => 'modern',
+        ]);
+    }
+
+    public function test_resume_index_is_paginated_and_returns_only_summaries(): void
+    {
+        $user = User::factory()->create();
+
+        foreach (range(1, 25) as $index) {
+            $user->resumes()->create([
+                'name' => "Pessoa {$index}",
+                'role' => 'Analista',
+                'style' => 'classic',
+            ]);
+        }
+
+        $otherUser = User::factory()->create();
+        $otherUser->resumes()->create([
+            'name' => 'Outra Pessoa',
+            'role' => 'Designer',
+            'style' => 'modern',
+        ]);
+
+        $this->actingAs($user);
+
+        $response = $this->getJson('/api/v1/resumes?per_page=10&page=2')
+            ->assertOk()
+            ->assertJsonCount(10, 'data')
+            ->assertJsonPath('meta.current_page', 2)
+            ->assertJsonPath('meta.per_page', 10)
+            ->assertJsonPath('meta.last_page', 3)
+            ->assertJsonPath('meta.total', 25);
+
+        $summary = $response->json('data.0');
+
+        $this->assertSame(
+            ['id', 'name', 'role', 'style', 'updated_at'],
+            array_keys($summary),
+        );
+        $this->assertArrayNotHasKey('document', $summary);
+
+        $this->getJson('/api/v1/resumes')
+            ->assertOk()
+            ->assertJsonCount(20, 'data')
+            ->assertJsonPath('meta.per_page', 20);
+
+        $this->getJson('/api/v1/resumes?per_page=1000')
+            ->assertOk()
+            ->assertJsonPath('meta.per_page', 100);
+
+        $this->getJson('/api/v1/resumes?per_page=0')
+            ->assertOk()
+            ->assertJsonPath('meta.per_page', 1);
+    }
 }

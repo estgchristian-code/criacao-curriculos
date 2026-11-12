@@ -5,9 +5,15 @@ use App\Http\Controllers\Api\V1\ResumeController;
 use App\Http\Resources\UserResource;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Schema;
 
 Route::prefix('v1')->group(function (): void {
-    Route::get('/health', fn () => response()->json(['status' => 'ok']));
+    Route::get('/health', fn () => response()->json([
+        'status' => 'ok',
+        // Exposes whether the `document` column already exists so clients can
+        // avoid offering a save action that the database cannot persist yet.
+        'document_persistence' => Schema::hasColumn('resumes', 'document'),
+    ]));
 
     Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:5,1');
     Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:6,1');
