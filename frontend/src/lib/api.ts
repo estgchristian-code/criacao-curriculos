@@ -1,3 +1,5 @@
+import type { ResumeDocument, ResumeStyle } from './resume-document'
+
 const apiOrigin = import.meta.env.VITE_API_URL?.replace(/\/$/, '') ?? ''
 
 export class ApiError extends Error {
@@ -184,11 +186,41 @@ export type ApiResume = {
   id: number
   name: string
   role: string
-  style: 'editorial' | 'classic' | 'modern' | 'minimal'
+  style: ResumeStyle
   updated_at: string
 }
 
+export type ApiResumeDetail = ApiResume & {
+  document: ResumeDocument | null
+}
+
+export type ApiHealth = {
+  status: string
+  document_persistence?: boolean
+}
+
+export type SaveResumeInput = {
+  name: string
+  role: string
+  style: ResumeStyle
+  document: ResumeDocument
+}
+
 type ResourceResponse<T> = { data: T }
+
+type PaginatedResponse<T> = {
+  data: T[]
+  meta?: {
+    current_page: number
+    last_page: number
+    per_page: number
+    total: number
+  }
+}
+
+export function getHealth(): Promise<ApiHealth> {
+  return apiRequest<ApiHealth>('/health')
+}
 
 export function getCurrentUser(): Promise<ApiUser> {
   return apiRequest<ResourceResponse<ApiUser>>('/user').then((response) => response.data)
@@ -222,9 +254,27 @@ export function logout(): Promise<{ message: string }> {
   return apiRequest<{ message: string }>('/logout', { method: 'POST' })
 }
 
+/**
+ * The API paginates the resume listing. Walk every page so the current UI,
+ * which renders a single client-side list, keeps showing all resumes.
+ */
 export async function listResumes(): Promise<ApiResume[]> {
-  const response = await apiRequest<ResourceResponse<ApiResume[]>>('/resumes')
-  return response.data
+  const resumes: ApiResume[] = []
+  const maxPages = 50
+  let page = 1
+  let lastPage = 1
+
+  do {
+    const response = await apiRequest<PaginatedResponse<ApiResume>>(
+      `/resumes?per_page=100&page=${page}`,
+    )
+
+    resumes.push(...response.data)
+    lastPage = Math.min(response.meta?.last_page ?? page, maxPages)
+    page += 1
+  } while (page <= lastPage)
+
+  return resumes
 }
 
 export async function createResume(
@@ -235,6 +285,27 @@ export async function createResume(
     body: JSON.stringify(input),
   })
   return response.data
+}
+
+/** Loads the complete resume, including its structured document. */
+export function getResume(id: number): Promise<ApiResumeDetail> {
+  return apiRequest<ResourceResponse<ApiResumeDetail>>(`/resumes/${id}`).then(
+    (response) => response.data,
+  )
+}
+
+/**
+ * Saves the editor state with PATCH. `document` is always sent as a complete
+ * snapshot, which is the update semantics supported by the API.
+ */
+export function saveResume(
+  id: number,
+  input: SaveResumeInput,
+): Promise<ApiResumeDetail> {
+  return apiRequest<ResourceResponse<ApiResumeDetail>>(`/resumes/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  }).then((response) => response.data)
 }
 
 export async function updateResume(

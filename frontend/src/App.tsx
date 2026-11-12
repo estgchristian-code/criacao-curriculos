@@ -4,6 +4,7 @@ import {
   createResume,
   deleteResume,
   getCurrentUser,
+  getHealth,
   listResumes,
   login,
   logout,
@@ -12,6 +13,7 @@ import {
   type ApiResume,
   type ApiUser,
 } from './lib/api'
+import { ResumeEditor } from './features/resume-editor/ResumeEditor'
 
 type IconName =
   | 'arrow-up-right'
@@ -133,7 +135,6 @@ const accentColors: Record<ResumeStyle, string> = {
 
 type Dialog =
   | { type: 'create'; template?: Template; resume?: Resume }
-  | { type: 'resume'; resume: Resume }
   | { type: 'template'; template: Template }
   | { type: 'all-resumes' }
   | { type: 'account' }
@@ -155,6 +156,30 @@ function getRequestErrorMessage(error: unknown, fallback: string): string {
   }
 
   return error instanceof Error ? error.message : fallback
+}
+
+function getResumeIdFromUrl(): number | null {
+  const params = new URLSearchParams(window.location.search)
+  const id = params.get('resume')
+  return id ? Number(id) : null
+}
+
+function setResumeIdInUrl(id: number | null) {
+  const params = new URLSearchParams(window.location.search)
+  if (id) {
+    params.set('resume', String(id))
+  } else {
+    params.delete('resume')
+  }
+  const currentSearch = window.location.search.slice(1)
+  const newSearch = params.toString()
+  if (newSearch !== currentSearch) {
+    window.history.pushState(
+      null,
+      '',
+      `${window.location.pathname}${newSearch ? '?' + newSearch : ''}${window.location.hash}`,
+    )
+  }
 }
 
 function Logo({ onClick }: { onClick?: () => void }) {
@@ -534,7 +559,10 @@ function ResumeCard({
   }
 
   return (
-    <article className="group overflow-hidden rounded-xl border border-slate-200/80 bg-white transition-shadow hover:shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
+    <article
+      className="group cursor-pointer overflow-hidden rounded-xl border border-slate-200/80 bg-white transition-shadow hover:shadow-[0_8px_24px_rgba(15,23,42,0.06)]"
+      onClick={() => onOpen(resume)}
+    >
       <div className="relative">
         <ResumeThumbnail style={resume.style} />
         <div
@@ -549,7 +577,10 @@ function ResumeCard({
             aria-haspopup="menu"
             aria-label={`Mais opções para ${resume.role}`}
             className="flex size-8 items-center justify-center rounded-lg border border-slate-200/80 bg-white/95 text-slate-500 opacity-100 shadow-sm transition-colors hover:text-slate-800 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100"
-            onClick={() => setMenuOpen(!menuOpen)}
+            onClick={(event) => {
+              event.stopPropagation()
+              setMenuOpen(!menuOpen)
+            }}
             type="button"
           >
             <Icon name="more" size={17} />
@@ -557,6 +588,7 @@ function ResumeCard({
           {menuOpen && (
             <div
               className="absolute right-0 top-full z-20 mt-1 w-40 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"
+              onClick={(event) => event.stopPropagation()}
               role="menu"
             >
               <button
@@ -565,7 +597,7 @@ function ResumeCard({
                 role="menuitem"
                 type="button"
               >
-                Visualizar
+                Abrir editor
               </button>
               <button
                 className="w-full rounded-lg px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-50"
@@ -573,7 +605,7 @@ function ResumeCard({
                 role="menuitem"
                 type="button"
               >
-                Editar
+                Editar dados
               </button>
               <button
                 className="w-full rounded-lg px-3 py-2 text-left text-xs text-rose-600 hover:bg-rose-50"
@@ -601,7 +633,10 @@ function ResumeCard({
         <button
           aria-label={`Abrir currículo ${resume.role}`}
           className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-50 hover:text-[#2F4B7C] focus:bg-slate-50 focus:text-[#2F4B7C]"
-          onClick={() => onOpen(resume)}
+          onClick={(event) => {
+            event.stopPropagation()
+            onOpen(resume)
+          }}
           type="button"
         >
           <Icon name="arrow-up-right" size={16} />
@@ -860,23 +895,6 @@ function CreateResumeForm({
   )
 }
 
-function ResumeDetails({ resume }: { resume: Resume }) {
-  return (
-    <div className="space-y-4">
-      <ResumeThumbnail style={resume.style} />
-      <div>
-        <h3 className="text-sm font-semibold text-slate-900">{resume.role}</h3>
-        <p className="mt-1 text-xs text-slate-500">{resume.name}</p>
-          <p className="mt-2 text-[11px] text-slate-400">{formatUpdatedAt(resume.updated_at)}</p>
-      </div>
-      <p className="rounded-lg bg-slate-50 px-3 py-2.5 text-xs leading-relaxed text-slate-600">
-          Esta visualização usa os dados persistidos deste currículo. Experiências, formação e
-          outras seções detalhadas ainda não fazem parte do modelo de dados.
-      </p>
-    </div>
-  )
-}
-
 function TemplateDetails({
   template,
   onUse,
@@ -1110,6 +1128,10 @@ function App() {
   const [deleting, setDeleting] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [editorResumeId, setEditorResumeId] = useState<number | null>(() => {
+    return getResumeIdFromUrl()
+  })
+  const [documentPersistence, setDocumentPersistence] = useState<boolean | null>(null)
   const [today] = useState(() => new Date())
   const [activeSection, setActiveSection] = useState(() => {
     const section = window.location.hash.slice(1)
@@ -1124,6 +1146,7 @@ function App() {
     setAuthMode('login')
     setAuthError('Sua sessão expirou. Entre novamente para continuar.')
     setDialog(null)
+    setEditorResumeId(null)
   }
 
   async function loadAccount() {
@@ -1178,6 +1201,22 @@ function App() {
   }, [])
 
   useEffect(() => {
+    let cancelled = false
+
+    void getHealth()
+      .then((health) => {
+        if (!cancelled) setDocumentPersistence(health.document_persistence ?? null)
+      })
+      .catch(() => {
+        if (!cancelled) setDocumentPersistence(null)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
     function syncActiveSection() {
       const section = window.location.hash.slice(1)
       if (['overview', 'resumes', 'templates'].includes(section)) {
@@ -1187,6 +1226,18 @@ function App() {
 
     window.addEventListener('hashchange', syncActiveSection)
     return () => window.removeEventListener('hashchange', syncActiveSection)
+  }, [])
+
+  useEffect(() => {
+    setResumeIdInUrl(editorResumeId)
+  }, [editorResumeId])
+
+  useEffect(() => {
+    function handlePopState() {
+      setEditorResumeId(getResumeIdFromUrl())
+    }
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
   }, [])
 
   const normalizedQuery = searchQuery.trim().toLocaleLowerCase('pt-BR')
@@ -1233,6 +1284,7 @@ function App() {
       setAuthMode('login')
       setStatusMessage(null)
       setDialog(null)
+      setEditorResumeId(null)
     } catch (requestError) {
       if (requestError instanceof ApiError && requestError.status === 401) {
         setUser(null)
@@ -1248,7 +1300,7 @@ function App() {
     }
   }
 
-  function handleSaved(resume: Resume) {
+  function upsertResume(resume: Resume) {
     setResumes((current) => {
       const exists = current.some((item) => item.id === resume.id)
       const updated = exists
@@ -1259,7 +1311,21 @@ function App() {
           new Date(second.updated_at).getTime() - new Date(first.updated_at).getTime(),
       )
     })
+  }
+
+  function handleSaved(resume: Resume) {
+    const isNew = dialog?.type === 'create' && !dialog.resume
+
+    upsertResume(resume)
     setDialog(null)
+    setStatusMessage(`Currículo "${resume.role}" salvo com sucesso.`)
+
+    // A newly created resume goes straight to the full editor.
+    if (isNew) setEditorResumeId(resume.id)
+  }
+
+  function handleEditorSaved(resume: Resume) {
+    upsertResume(resume)
     setStatusMessage(`Currículo "${resume.role}" salvo com sucesso.`)
   }
 
@@ -1480,7 +1546,7 @@ function App() {
                     setDialog({ type: 'delete', resume: selected })
                   }}
                   onEdit={(selected) => setDialog({ type: 'create', resume: selected })}
-                  onOpen={(selected) => setDialog({ type: 'resume', resume: selected })}
+                  onOpen={(selected) => setEditorResumeId(selected.id)}
                   resume={resume}
                 />
               ))}
@@ -1531,17 +1597,15 @@ function App() {
               ? dialog.resume
                 ? 'Editar currículo'
                 : 'Criar currículo'
-              : dialog.type === 'resume'
-                ? dialog.resume.role
-                : dialog.type === 'template'
-                  ? 'Visualizar modelo'
-                  : dialog.type === 'all-resumes'
-                    ? 'Todos os currículos'
-                    : dialog.type === 'account'
-                      ? 'Dados da conta'
-                      : dialog.type === 'delete'
-                        ? 'Excluir currículo'
-                        : 'Dados da conta'
+              : dialog.type === 'template'
+                ? 'Visualizar modelo'
+                : dialog.type === 'all-resumes'
+                  ? 'Todos os currículos'
+                  : dialog.type === 'account'
+                    ? 'Dados da conta'
+                    : dialog.type === 'delete'
+                      ? 'Excluir currículo'
+                      : 'Dados da conta'
           }
         >
           {dialog.type === 'create' && (
@@ -1553,7 +1617,6 @@ function App() {
               template={dialog.template}
             />
           )}
-          {dialog.type === 'resume' && <ResumeDetails resume={dialog.resume} />}
           {dialog.type === 'template' && (
             <TemplateDetails
               onUse={() => setDialog({ type: 'create', template: dialog.template })}
@@ -1572,7 +1635,10 @@ function App() {
                       ? loadError ?? 'Não foi possível carregar os currículos.'
                       : 'Sua conta ainda não tem currículos.'
               }
-              onOpen={(resume) => setDialog({ type: 'resume', resume })}
+              onOpen={(resume) => {
+                setDialog(null)
+                setEditorResumeId(resume.id)
+              }}
             />
           )}
           {dialog.type === 'account' && (
@@ -1611,6 +1677,16 @@ function App() {
             </div>
           )}
         </DialogFrame>
+      )}
+      {editorResumeId !== null && (
+        <ResumeEditor
+          documentPersistence={documentPersistence}
+          key={editorResumeId}
+          onClose={() => setEditorResumeId(null)}
+          onSaved={handleEditorSaved}
+          onUnauthorized={handleSessionExpired}
+          resumeId={editorResumeId}
+        />
       )}
     </div>
   )
