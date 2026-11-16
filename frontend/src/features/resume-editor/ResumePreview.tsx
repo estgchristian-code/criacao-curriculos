@@ -111,7 +111,7 @@ function ItemBlock({
   const heading = hasTitle ? item.title : item.organization
 
   return (
-    <div>
+    <div className="resume-item">
       <div
         style={{
           display: 'flex',
@@ -200,7 +200,10 @@ function SectionBlock({
   }
 
   return (
-    <section style={{ marginBottom: unit(theme.sectionSpacing) }}>
+    <section
+      className="resume-section"
+      style={{ marginBottom: unit(theme.sectionSpacing) }}
+    >
       <h2 style={sectionHeadingStyle(theme)}>{section.title || ' '}</h2>
 
       {textAsBody && <p style={bodyStyle}>{section.text}</p>}
@@ -308,6 +311,7 @@ function DocumentHeader({ document }: { document: ResumeDocument }) {
   if (theme.headerStyle === 'banner') {
     return (
       <header
+        className="resume-document-header"
         style={{
           backgroundColor: theme.accentColor,
           color: '#FFFFFF',
@@ -363,6 +367,7 @@ function DocumentHeader({ document }: { document: ResumeDocument }) {
   if (theme.headerStyle === 'split') {
     return (
       <header
+        className="resume-document-header"
         style={{
           alignItems: 'flex-end',
           borderBottom: `${unit(1.5)} solid ${theme.accentColor}`,
@@ -398,7 +403,10 @@ function DocumentHeader({ document }: { document: ResumeDocument }) {
   }
 
   return (
-    <header style={{ marginBottom: textSpace(20) }}>
+    <header
+      className="resume-document-header"
+      style={{ marginBottom: textSpace(20) }}
+    >
       <h1 style={nameStyle}>{header.name}</h1>
       <p style={headlineStyle}>{header.headline}</p>
       {contacts.length > 0 && (
@@ -453,7 +461,7 @@ export function ResumePreview({
     >
       <article
         aria-label="Pré-visualização do currículo em formato A4"
-        className="mx-auto w-full bg-white ring-1 ring-slate-200/80"
+        className="resume-sheet mx-auto w-full bg-white ring-1 ring-slate-200/80"
         style={{
           boxShadow: '0 18px 45px rgba(15, 23, 42, 0.10)',
           boxSizing: 'border-box',

@@ -33,3 +33,86 @@
     cursor: pointer;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Impressão do currículo
+   ---------------------------------------------------------------------------
+   A folha A4 é renderizada em um portal no <body> (fora do overlay do
+   editor), para que o conteúdo possa fluir por várias páginas sem ser
+   recortado pelos contêineres com rolagem da aplicação. Na tela esse portal
+   fica oculto; na impressão o aplicativo inteiro é escondido e somente a
+   folha do currículo é exibida.
+--------------------------------------------------------------------------- */
+.resume-print-root {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: A4 portrait;
+    /* As margens visuais vêm do padding do documento (theme.pagePadding,
+       ~12-16 mm), preservando o desenho da pré-visualização A4. */
+    margin: 0;
+  }
+
+  /* Os seletores usam :has() para agir somente quando o editor está aberto e
+     a folha de impressão existe. Fora do editor, a aplicação continua sendo
+     impressa como antes. */
+  body:has(.resume-print-root) {
+    width: 210mm;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+  }
+
+  /* Oculta cabeçalho, menus, botões, painéis de edição e demais controles. */
+  body:has(.resume-print-root) #root {
+    display: none !important;
+  }
+
+  body:has(.resume-print-root) .resume-print-root {
+    display: block !important;
+  }
+
+  body:has(.resume-print-root) .resume-print-root > div {
+    width: 210mm !important;
+  }
+
+  /* 794px equivalem a 210mm em 96 dpi: a folha mantém a mesma escala da
+     pré-visualização. min-height garante uma página completa em currículos
+     curtos; a altura permanece automática para documentos longos. */
+  .resume-print-root .resume-sheet {
+    width: 210mm !important;
+    max-width: none !important;
+    min-height: 296mm !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    box-shadow: none !important;
+    outline: none !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Evita que cabeçalho, itens e títulos sejam divididos entre páginas. */
+  .resume-print-root .resume-document-header,
+  .resume-print-root .resume-item {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .resume-print-root h1,
+  .resume-print-root h2,
+  .resume-print-root h3 {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  .resume-print-root p {
+    orphans: 2;
+    widows: 2;
+  }
+
+  .resume-print-root section {
+    break-inside: auto;
+  }
+}

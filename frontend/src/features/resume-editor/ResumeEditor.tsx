@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import {
   ApiError,
   getResume,
@@ -46,6 +47,7 @@ type EditorIconName =
   | 'plus'
   | 'close'
   | 'check'
+  | 'printer'
 
 const editorIconPaths: Record<EditorIconName, ReactNode> = {
   up: <path d="m6 14 6-6 6 6" />,
@@ -73,6 +75,13 @@ const editorIconPaths: Record<EditorIconName, ReactNode> = {
   plus: <path d="M12 5v14M5 12h14" />,
   close: <path d="m18 6-12 12M6 6l12 12" />,
   check: <path d="m5 13 4 4L19 7" />,
+  printer: (
+    <>
+      <path d="M6 9V3h12v6" />
+      <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+      <path d="M6 14h12v7H6z" />
+    </>
+  ),
 }
 
 function EditorIcon({
@@ -407,6 +416,9 @@ function moveEntry<T>(list: T[], index: number, direction: -1 | 1): T[] {
   return next
 }
 
+/** Debounce applied to autosave: one save, one second after the last edit. */
+const AUTOSAVE_DELAY_MS = 1000
+
 export type ResumeEditorProps = {
   resumeId: number
   documentPersistence: boolean | null
@@ -432,18 +444,35 @@ export function ResumeEditor({
   const [addMenuOpen, setAddMenuOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [saveRetryable, setSaveRetryable] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
 
   const callbacks = useRef({ onSaved, onUnauthorized })
+
+  // Autosave bookkeeping kept in refs so timers and queued requests always see
+  // the freshest document without depending on a specific render closure.
+  const saveInFlightRef = useRef(false)
+  const pendingSaveRef = useRef(false)
+  const latestDocRef = useRef<ResumeDocument | null>(null)
+  const snapshotRef = useRef('')
+  const hasLoadedRef = useRef(false)
+  const runSaveRef = useRef<(origin: 'manual' | 'auto') => Promise<void>>(
+    async () => {},
+  )
 
   useEffect(() => {
     callbacks.current = { onSaved, onUnauthorized }
   }, [onSaved, onUnauthorized])
 
+  useEffect(() => {
+    latestDocRef.current = doc
+  }, [doc])
+
   const dirty = doc !== null && JSON.stringify(doc) !== snapshot
 
   useEffect(() => {
     let cancelled = false
+    hasLoadedRef.current = false
 
     getResume(resumeId)
       .then((resume) => {
@@ -455,9 +484,12 @@ export function ResumeEditor({
           resume.name,
           resume.role,
         )
+        const serialized = JSON.stringify(normalized)
 
         setDoc(normalized)
-        setSnapshot(JSON.stringify(normalized))
+        setSnapshot(serialized)
+        snapshotRef.current = serialized
+        hasLoadedRef.current = true
         setSelectedSectionId(normalized.sections[0]?.id ?? null)
         setLoadState('ready')
       })
@@ -500,6 +532,23 @@ export function ResumeEditor({
     window.addEventListener('beforeunload', handleBeforeUnload)
     return () => window.removeEventListener('beforeunload', handleBeforeUnload)
   }, [dirty])
+
+  /**
+   * Autosave debounce: every edit restarts the timer, so rapid changes produce
+   * a single request one second after the user stops typing. The effect is
+   * inert while the resume is loading, when there is nothing to save, or when
+   * the environment cannot persist documents.
+   */
+  useEffect(() => {
+    if (loadState !== 'ready' || !doc || !dirty) return
+    if (documentPersistence === false) return
+
+    const timeout = window.setTimeout(() => {
+      void runSaveRef.current('auto')
+    }, AUTOSAVE_DELAY_MS)
+
+    return () => window.clearTimeout(timeout)
+  }, [doc, dirty, loadState, documentPersistence])
 
   function handleClose() {
     if (saving) return
@@ -695,30 +744,61 @@ export function ResumeEditor({
     updateSection(sectionId, { items: moveEntry(section.items, index, direction) })
   }
 
-  async function handleSave() {
-    if (!doc || saving) return
+  /**
+   * Single entry point for manual saves and autosave. Requests are serialized:
+   * if one is already running, the new attempt is queued and executed once it
+   * finishes, always sending the latest document.
+   */
+  async function runSave(origin: 'manual' | 'auto'): Promise<void> {
+    if (saveInFlightRef.current) {
+      pendingSaveRef.current = true
+      return
+    }
+
+    const currentDoc = latestDocRef.current
+
+    if (!currentDoc) return
+
+    // Never autosave before the initial load has completed.
+    if (origin === 'auto' && !hasLoadedRef.current) return
 
     if (documentPersistence === false) {
-      setSaveError(
-        'A gravação do conteúdo está indisponível neste ambiente porque a coluna "document" ainda não existe no banco.',
-      )
+      if (origin === 'manual') {
+        setSaveError(
+          'A gravação do conteúdo está indisponível neste ambiente porque a coluna "document" ainda não existe no banco.',
+        )
+        setSaveRetryable(false)
+      }
       return
     }
 
-    const payload = documentForSave(doc)
+    const documentAtSave = JSON.stringify(currentDoc)
+
+    // Autosave only runs when the editor holds something newer than the last
+    // snapshot successfully persisted.
+    if (origin === 'auto' && documentAtSave === snapshotRef.current) return
+
+    const payload = documentForSave(currentDoc)
     const problems = validateDocument(payload)
 
+    // Invalid documents are never sent to the API. Manual save explains why;
+    // autosave waits silently until the document becomes valid again.
     if (problems.length > 0) {
-      setSaveError(problems[0])
+      if (origin === 'manual') {
+        setSaveError(problems[0])
+        setSaveRetryable(false)
+      }
       return
     }
 
-    const documentAtSave = JSON.stringify(doc)
     const savedSnapshot = JSON.stringify(payload)
+    const isManual = origin === 'manual'
 
+    saveInFlightRef.current = true
     setSaving(true)
     setSaveError(null)
-    setNotice(null)
+    setSaveRetryable(false)
+    if (isManual) setNotice(null)
 
     try {
       const saved = await saveResume(resumeId, {
@@ -728,25 +808,46 @@ export function ResumeEditor({
         document: payload,
       })
 
+      snapshotRef.current = savedSnapshot
       setSnapshot(savedSnapshot)
       // Preserve edits made while the request was in flight instead of
       // overwriting them with the snapshot sent to the API.
       setDoc((current) =>
-        JSON.stringify(current) === documentAtSave ? payload : current,
+        current !== null && JSON.stringify(current) === documentAtSave
+          ? payload
+          : current,
       )
-      setNotice('Currículo salvo com sucesso.')
+      if (isManual) setNotice('Currículo salvo com sucesso.')
       callbacks.current.onSaved(saved)
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
+        pendingSaveRef.current = false
         callbacks.current.onUnauthorized()
         return
       }
 
       setSaveError(readErrorMessage(error, 'Não foi possível salvar o currículo.'))
+      setSaveRetryable(true)
     } finally {
+      saveInFlightRef.current = false
       setSaving(false)
+
+      if (pendingSaveRef.current) {
+        pendingSaveRef.current = false
+        void runSaveRef.current('auto')
+      }
     }
   }
+
+  function handleSave() {
+    latestDocRef.current = doc
+    void runSave('manual')
+  }
+
+  // Keep the timer/queue pointing at the save routine of the latest render.
+  useEffect(() => {
+    runSaveRef.current = runSave
+  })
 
   const selectedSection =
     doc?.sections.find((section) => section.id === selectedSectionId) ??
@@ -784,10 +885,21 @@ export function ResumeEditor({
             </p>
             <p
               className={`truncate text-[11px] ${
-                dirty ? 'text-amber-600' : 'text-slate-500'
+                saveError
+                  ? 'text-rose-600'
+                  : dirty || saving
+                    ? 'text-amber-600'
+                    : 'text-slate-500'
               }`}
+              role="status"
             >
-              {dirty ? 'Alterações não salvas' : notice ?? 'Conteúdo salvo'}
+              {saving
+                ? 'Salvando...'
+                : saveError
+                  ? 'Erro ao salvar'
+                  : dirty
+                    ? 'Alterações não salvas'
+                    : 'Salvo'}
             </p>
           </div>
         </div>
@@ -808,6 +920,15 @@ export function ResumeEditor({
             ))}
           </select>
           <button
+            className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 sm:px-4"
+            disabled={!doc || loadState !== 'ready'}
+            onClick={() => window.print()}
+            type="button"
+          >
+            <EditorIcon name="printer" size={15} />
+            Imprimir
+          </button>
+          <button
             className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#2F4B7C] px-3 text-xs font-semibold text-white transition-colors hover:bg-[#263F69] disabled:cursor-not-allowed disabled:opacity-50 sm:px-4"
             disabled={
               saving || !doc || !dirty || documentPersistence === false
@@ -816,7 +937,7 @@ export function ResumeEditor({
             type="button"
           >
             <EditorIcon name="check" size={15} />
-            {saving ? 'Salvando…' : 'Salvar'}
+            {saving ? 'Salvando...' : 'Salvar'}
           </button>
         </div>
       </header>
@@ -843,13 +964,24 @@ export function ResumeEditor({
           role="alert"
         >
           <span>{saveError}</span>
-          <button
-            className="shrink-0 font-semibold underline"
-            onClick={() => setSaveError(null)}
-            type="button"
-          >
-            Fechar
-          </button>
+          <span className="flex shrink-0 items-center gap-3">
+            {saveRetryable && (
+              <button
+                className="font-semibold underline"
+                onClick={() => void runSaveRef.current('manual')}
+                type="button"
+              >
+                Tentar novamente
+              </button>
+            )}
+            <button
+              className="font-semibold underline"
+              onClick={() => setSaveError(null)}
+              type="button"
+            >
+              Fechar
+            </button>
+          </span>
         </div>
       )}
 
@@ -1564,6 +1696,15 @@ export function ResumeEditor({
           </div>
         </div>
       )}
+
+      {doc &&
+        loadState === 'ready' &&
+        createPortal(
+          <div aria-hidden="true" className="resume-print-root">
+            <ResumePreview document={doc} />
+          </div>,
+          window.document.body,
+        )}
     </div>
   )
 }
